@@ -1,0 +1,12 @@
+# 核心依赖
+python-dotenv==1.0.1       # 读取 .env 配置
+requests==2.32.3           # HTTP 请求
+loguru==0.7.3              # 日志
+pydantic==2.9.0            # 数据校验
+pydantic-settings==2.5.2   # 从 .env 读取配置到 Pydantic 模型
+openai>=1.51.0             # AI 接口（DeepSeek 兼容 OpenAI SDK）
+playwright>=1.60.0         # 浏览器自动化（操作 MultiPost）
+
+# 后续步骤会用到
+# fastapi==0.115.0
+# uvicorn==0.30.6
