@@ -388,7 +388,7 @@ class MaimaiPoster:
         editor = page.locator('[contenteditable="true"]')
         if editor.count() > 0:
             editor.first.click()
-            page.keyboard.press("SELECT_ALL_KEY")
+            page.keyboard.press(SELECT_ALL_KEY)
             page.keyboard.press("Backspace")
             time.sleep(0.3)
 
@@ -425,7 +425,7 @@ class MaimaiPoster:
         if textarea.count() > 0:
             textarea.first.click()
             # 全选并删除已有内容
-            page.keyboard.press("SELECT_ALL_KEY")
+            page.keyboard.press(SELECT_ALL_KEY)
             page.keyboard.press("Backspace")
             time.sleep(0.2)
             textarea.first.fill(content)
@@ -438,7 +438,7 @@ class MaimaiPoster:
         if editor.count() > 0:
             editor.first.click()
             # 全选删除已有内容
-            page.keyboard.press("SELECT_ALL_KEY")
+            page.keyboard.press(SELECT_ALL_KEY)
             page.keyboard.press("Backspace")
             time.sleep(0.2)
             page.keyboard.type(content, delay=10)

@@ -79,6 +79,10 @@ def parse_shandian(text: str) -> List[Dict]:
     返回：
       [{"title": "标题", "content": "正文", "topic": "话题名称", "image_paths": []}, ...]
       每个话题产生2篇文章
+
+    支持两种格式：
+      格式1：**第一篇｜标题**  正文
+      格式2：### 【第一篇｜标题】  正文
     """
     posts = []
 
@@ -100,10 +104,12 @@ def parse_shandian(text: str) -> List[Dict]:
         # 去掉话题标题行，剩余为文章内容
         content_block = block[topic_match.end():].strip()
 
-        # 3. 按 **第X篇｜** 拆分文章
-        # 匹配 **第一篇｜** 或 **第二篇｜**
+        # 3. 按文章标记拆分
+        # 兼容两种格式：
+        #   格式1：**第一篇｜标题**   → \*\*第[一二]篇[｜|]
+        #   格式2：### 【第一篇｜标题】 → ###\s*[【\[]第[一二]篇[｜|]
         article_parts = re.split(
-            r'\*\*第[一二]篇[｜|]',
+            r'(?:\*\*|###\s*[【\[])第[一二]篇[｜|]',
             content_block,
         )
 
@@ -113,8 +119,10 @@ def parse_shandian(text: str) -> List[Dict]:
             if not part:
                 continue
 
-            # 4. 提取标题：从 **第X篇｜** 后面到 ** 之间的文字
-            title_match = re.match(r'(.+?)\*\*', part)
+            # 4. 提取标题
+            # 格式1：标题**  → title后跟**结束
+            # 格式2：标题】** 或 标题】  → title后跟】和可能的**
+            title_match = re.match(r'(.+?)(?:\*\*|[】\]])', part)
             if title_match:
                 title = title_match.group(1).strip()
                 # 去掉标题部分，剩余为正文
@@ -125,9 +133,9 @@ def parse_shandian(text: str) -> List[Dict]:
                 title = lines[0].strip()
                 body = lines[1].strip() if len(lines) > 1 else ''
 
-            # 5. 清理正文：去除所有 ** 符号，保留分段
-            title = title.replace('**', '').strip()
-            body = body.replace('**', '').strip()
+            # 5. 清理正文：去除所有 ** ### 【】 符号，保留分段
+            title = re.sub(r'[\*\#【】\[\]]', '', title).strip()
+            body = re.sub(r'[\*\#]', '', body).strip()
 
             # 去掉可能残留的标题行（如果正文以标题开头）
             body = re.sub(r'^' + re.escape(title) + r'\s*\n?', '', body).strip()
