@@ -17,9 +17,13 @@
   - 不要短时间内大量发布，可能触发平台风控
 """
 
+import platform
 import random
 import time
 from typing import Optional, List
+
+# 跨平台快捷键：Mac 用 Meta(Command)，Windows/Linux 用 Control
+SELECT_ALL_KEY = "Meta+A" if platform.system() == "Darwin" else "Control+A"
 
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 from loguru import logger
@@ -384,7 +388,7 @@ class MaimaiPoster:
         editor = page.locator('[contenteditable="true"]')
         if editor.count() > 0:
             editor.first.click()
-            page.keyboard.press("Meta+A")
+            page.keyboard.press("SELECT_ALL_KEY")
             page.keyboard.press("Backspace")
             time.sleep(0.3)
 
@@ -421,7 +425,7 @@ class MaimaiPoster:
         if textarea.count() > 0:
             textarea.first.click()
             # 全选并删除已有内容
-            page.keyboard.press("Meta+A")
+            page.keyboard.press("SELECT_ALL_KEY")
             page.keyboard.press("Backspace")
             time.sleep(0.2)
             textarea.first.fill(content)
@@ -434,7 +438,7 @@ class MaimaiPoster:
         if editor.count() > 0:
             editor.first.click()
             # 全选删除已有内容
-            page.keyboard.press("Meta+A")
+            page.keyboard.press("SELECT_ALL_KEY")
             page.keyboard.press("Backspace")
             time.sleep(0.2)
             page.keyboard.type(content, delay=10)
