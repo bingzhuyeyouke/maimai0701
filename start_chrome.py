@@ -7,8 +7,8 @@ Chrome 启动辅助脚本
   python3 start_chrome.py
 
 启动后 Chrome 会打开，保持该终端窗口不要关闭。
-然后在另一个终端运行主程序：
-  python3 main.py
+然后在另一个终端运行发帖程序：
+  python3 paste_post.py
 
 ⚠️  如果 Chrome 已经在运行，需要先完全退出（Cmd+Q）再运行本脚本
 """
@@ -121,7 +121,7 @@ def start_chrome():
         resp = urllib.request.urlopen(f"http://localhost:{DEBUG_PORT}/json/version", timeout=3)
         if resp.status == 200:
             logger.success(f"✓ Chrome 已启动，调试端口: {DEBUG_PORT}")
-            logger.info("保持此窗口不要关闭，在另一个终端运行：python3 main.py")
+            logger.info("保持此窗口不要关闭，在另一个终端运行：python3 paste_post.py")
             return True
     except Exception:
         pass

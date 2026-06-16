@@ -17,42 +17,24 @@ class Settings(BaseSettings):
     用法：from config import settings
     """
 
-    # ---------- 热点抓取 ----------
-    crawl_interval: int = Field(
-        default=60,
-        description="请求间隔（秒），避免被反爬",
+    # ---------- 日志 ----------
+    log_level: str = Field(default="INFO", description="日志级别")
+
+    # ---------- 脉脉发帖 ----------
+    maimai_post_interval: int = Field(
+        default=150,
+        description="脉脉发帖间隔基准（秒），实际会随机±30秒抖动防检测，默认150秒≈2.5分钟",
     )
+
+    # ---------- AI 内容生成 ----------
+    ai_api_key: str = Field(default="", description="AI 接口密钥")
+    ai_model: str = Field(default="gpt-4o-mini", description="AI 模型名称")
+    ai_base_url: str = Field(default="https://api.openai.com/v1", description="AI 接口地址")
 
     # ---------- 数据库 ----------
     db_path: str = Field(
         default="media_assistant.db",
         description="SQLite 数据库文件名",
-    )
-
-    # ---------- AI 内容生成（第2步用，先占位） ----------
-    ai_api_key: str = Field(default="", description="AI 接口密钥")
-    ai_model: str = Field(default="gpt-4o-mini", description="AI 模型名称")
-    ai_base_url: str = Field(default="https://api.openai.com/v1", description="AI 接口地址")
-
-    # ---------- 日志 ----------
-    log_level: str = Field(default="INFO", description="日志级别")
-
-    # ---------- 飞书表格 ----------
-    feishu_app_id: str = Field(default="", description="飞书应用 app_id")
-    feishu_app_secret: str = Field(default="", description="飞书应用 app_secret")
-    feishu_spreadsheet_token: str = Field(
-        default="",
-        description="飞书多维表格 token（bitable app_token，或 Wiki 节点 token 会自动解析）",
-    )
-    feishu_sheet_id: str = Field(
-        default="",
-        description="飞书多维表格 table_id（留空则自动获取第一个表）",
-    )
-
-    # ---------- 脉脉发帖 ----------
-    maimai_post_interval: int = Field(
-        default=180,
-        description="脉脉发帖间隔（秒），默认3分钟",
     )
 
     @property

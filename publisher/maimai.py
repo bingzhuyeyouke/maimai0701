@@ -17,6 +17,7 @@
   - 不要短时间内大量发布，可能触发平台风控
 """
 
+import random
 import time
 from typing import Optional, List
 
@@ -143,10 +144,12 @@ class MaimaiPoster:
                 except Exception:
                     pass
 
-            # 不是最后一篇时等待
+            # 不是最后一篇时等待（随机抖动防检测）
             if i < total and not dry_run:
-                logger.info(f"⏳ 等待 {interval} 秒后发布下一篇...")
-                time.sleep(interval)
+                jitter = random.randint(-30, 30)  # ±30秒抖动
+                actual_wait = max(60, interval + jitter)  # 最少等1分钟
+                logger.info(f"⏳ 等待 {actual_wait} 秒后发布下一篇...")
+                time.sleep(actual_wait)
 
         logger.info(f"\n{'='*40}")
         logger.info(f"🏁 批量发帖完成: 成功 {success}, 失败 {failed}")

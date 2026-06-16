@@ -186,10 +186,16 @@ def parse_posts(text: str) -> List[Dict]:
 
 
 def resolve_images(posts: List[Dict], image_dir: str = None, image_files: List[str] = None):
-    """解析图片路径"""
+    """
+    解析图片路径，支持3种配对方式（优先级从高到低）：
+
+    1. --images 指定图片列表（所有帖子共用）
+    2. 正文中 [图片:xxx.jpg] 标记（每篇独立指定）
+    3. posts/images/ 目录按序号自动配对（1.jpg→第1篇，2.jpg→第2篇...）
+    """
     img_dir = PROJECT_ROOT / 'posts' / 'images'
 
-    # 方式1：从 --images 参数
+    # 方式1：从 --images 参数（所有帖子共用）
     if image_files:
         for post in posts:
             resolved = []
@@ -205,9 +211,11 @@ def resolve_images(posts: List[Dict], image_dir: str = None, image_files: List[s
         return
 
     # 方式2：从正文中的 [图片:xxx.jpg] 标记
+    has_inline_images = False
     for post in posts:
         img_refs = re.findall(r'\[图片[：:](.+?)\]', post['content'])
         if img_refs:
+            has_inline_images = True
             resolved = []
             for ref in img_refs:
                 ref = ref.strip()
@@ -221,20 +229,30 @@ def resolve_images(posts: List[Dict], image_dir: str = None, image_files: List[s
             post['image_paths'] = resolved
             # 从正文中移除图片标记
             post['content'] = re.sub(r'\[图片[：:].+?\]\s*', '', post['content'])
+    if has_inline_images:
+        return
 
-    # 方式3：从 image_dir 目录
-    if image_dir:
-        dir_path = Path(image_dir)
-        if dir_path.exists():
-            all_images = sorted([
-                str(f) for f in dir_path.iterdir()
-                if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.gif', '.webp')
-            ])
-            if all_images and not any(p.get('image_paths') for p in posts):
-                # 平均分配图片给各帖子
-                for i, post in enumerate(posts):
-                    if i < len(all_images):
-                        post['image_paths'] = [all_images[i]]
+    # 方式3：从 posts/images/ 目录按序号自动配对
+    # 1.jpg/1.png → 第1篇, 2.jpg → 第2篇, ...
+    if img_dir.exists():
+        all_images = sorted([
+            f for f in img_dir.iterdir()
+            if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.gif', '.webp')
+        ], key=lambda f: _natural_sort_key(f.name))
+
+        if all_images:
+            for i, post in enumerate(posts):
+                if i < len(all_images):
+                    post['image_paths'] = [str(all_images[i])]
+                    logger.info(f"    📎 图片配对: {all_images[i].name} → 第{i+1}篇")
+
+
+def _natural_sort_key(s: str) -> list:
+    """自然排序 key，让 1.jpg < 2.jpg < 10.jpg（而不是 1.jpg < 10.jpg < 2.jpg）"""
+    return [
+        int(c) if c.isdigit() else c.lower()
+        for c in re.split(r'(\d+)', s)
+    ]
 
 
 # ========== 主流程 ==========
