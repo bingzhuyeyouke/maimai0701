@@ -195,7 +195,6 @@ class MaimaiPoster:
                     page.keyboard.press("Escape")
                     time.sleep(1)
                     page.reload(wait_until="domcontentloaded", timeout=15000)
-                    page.bring_to_front()
                     time.sleep(5)
                     # 重新填入标题和正文
                     if title:
@@ -230,7 +229,6 @@ class MaimaiPoster:
             page.goto(MAIMAI_HOME_URL, wait_until="domcontentloaded", timeout=15000)
             # 刷新页面确保DOM状态干净（否则弹窗可能不渲染）
             page.reload(wait_until="domcontentloaded", timeout=15000)
-            page.bring_to_front()
             time.sleep(3)
         except Exception:
             logger.warning("  ⚠️ 导航回首页失败，下一篇会自动重试")
@@ -259,7 +257,6 @@ class MaimaiPoster:
                             && rect2 && rect2.width > 50;
                     }''')
                     if editor_ok:
-                        pg.bring_to_front()
                         pg.reload(wait_until="domcontentloaded", timeout=15000)
                         time.sleep(3)
                         logger.success("✓ 发帖页已打开（复用现有标签页）")
@@ -277,7 +274,6 @@ class MaimaiPoster:
                                 && contentEditor.getBoundingClientRect().width > 50;
                         }''')
                         if editor_ok2:
-                            pg.bring_to_front()
                             logger.success("✓ 发帖页已打开（导航后编辑器就绪）")
                             return pg
             except Exception:
