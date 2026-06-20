@@ -343,6 +343,7 @@ def run(
     # 发帖成功后自动清理图片目录
     if result['failed'] == 0:
         _cleanup_images()
+        _cleanup_batch_images(file_path)
 
     logger.info("=" * 55)
     logger.info(f"🏁 完成: 成功 {result['success']}, 失败 {result['failed']}")
@@ -361,7 +362,25 @@ def _cleanup_images():
     if images:
         for f in images:
             f.unlink()
-        logger.info(f"🧹 已清理 {len(images)} 张图片")
+        logger.info(f"🧹 已清理 images/ 下 {len(images)} 张图片")
+
+
+def _cleanup_batch_images(file_path: str):
+    """发帖成功后自动清理对应 batch 文件夹中的图片，方便下次存放"""
+    if not file_path:
+        return
+    # 从文件路径推断 batch 目录（如 posts/batch3/content.txt → posts/batch3/）
+    content_path = Path(file_path)
+    if not content_path.is_absolute():
+        content_path = PROJECT_ROOT / content_path
+    if content_path.parent.name.startswith('batch') and content_path.parent.exists():
+        batch_dir = content_path.parent
+        images = [f for f in batch_dir.iterdir()
+                  if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.gif', '.webp')]
+        if images:
+            for f in images:
+                f.unlink()
+            logger.info(f"🧹 已清理 {batch_dir.name}/ 下 {len(images)} 张图片")
 
 
 # ========== 入口 ==========
