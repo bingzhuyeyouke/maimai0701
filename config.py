@@ -28,8 +28,8 @@ class Settings(BaseSettings):
 
     # ---------- 闪电观察者 ----------
     shandian_post_interval: int = Field(
-        default=300,
-        description="闪电观察者发帖间隔基准（秒），±30秒抖动，默认300秒≈5分钟",
+        default=210,
+        description="闪电观察者发帖间隔基准（秒），±30秒抖动，默认210秒≈3-4分钟",
     )
     pexels_api_key: str = Field(
         default="",
