@@ -219,6 +219,112 @@ def _split_rewrite_result(result: str, fallback_title: str) -> tuple:
     return (title, body)
 
 
+REWRITE_MARKDOWN_PROMPT = """你是一位资深的今日头条和微信公众号创作者。请将以下脉脉帖子改写为一篇适合在今日头条、微信公众号、知乎、掘金等平台发布的 Markdown 文章。
+
+改写要求：
+
+1. **标题**：生成一个吸引人的标题，风格参考今日头条爆款标题：
+   - 可以用数字、疑问句、对比等手法
+   - 标题长度15-30字
+   - 不要标题党，但要有吸引力
+   - 不要用"震惊"、"竟然"等低质标题词
+
+2. **正文改写**：
+   - 将原始帖子内容改写为完整的 Markdown 格式文章
+   - 保留核心观点和事实
+   - 文章风格：口语化、接地气、有观点、有活人感
+   - 段落要短（每段2-3句），适合手机阅读
+   - 开头3秒抓住读者注意力
+   - 结尾要有互动引导（提问/评论引导）
+   - 字数300-800字
+   - 使用 Markdown 格式：用 **加粗** 强调重点，用 > 引用，用 - 列表
+   - 不要用 # 标题（标题单独提供），正文用 --- 分隔章节即可
+
+3. **合规要求**（必须严格遵守）：
+   - 所有具体公司名替换为"某大厂"或"某互联网公司"
+   - 如果上下文能区分公司类型，用"某电商大厂"、"某社交大厂"、"某搜索大厂"等
+   - 具体人名替换为"某员工"、"某高管"等
+   - 具体薪资数字模糊化，如"15k"改为"1.5万左右"
+
+4. **格式**：
+   - 第一行输出标题（不要加#号）
+   - 空一行后输出 Markdown 格式正文
+   - 图片位置用 ![图片描述](image_placeholder) 标记
+
+5. **禁止**：
+   - 不要编造原文中没有的事实和数据
+   - 不要大段搬运原文，要真正改写
+   - 不要写成新闻稿风格，要有个人观点和感受
+   - 不要使用比喻句和排比句
+   - 不要添加"作为一名职场人"等套话开头
+
+原始帖子内容：
+标题：{title}
+正文：{content}
+
+请输出改写后的标题和 Markdown 正文："""
+
+
+def text_rewrite_markdown(content: str, title: str = "") -> tuple:
+    """
+    AI 全文改写（Markdown 输出版）：将脉脉帖子改写为适合多平台发布的 Markdown 文章
+
+    与 text_rewrite() 的区别：
+    - text_rewrite() 输出纯文本，适合脉脉和头条
+    - text_rewrite_markdown() 输出 Markdown，适合知乎、掘金、CSDN 等支持 Markdown 的平台，
+      也适合通过 Wechatsync 的 sync_article MCP 工具发布
+
+    参数:
+        content: 原始帖子正文
+        title:   原始帖子标题（可选）
+
+    返回:
+        (new_title, markdown_body) 元组
+        如果改写失败，返回 (原title, 原content)
+    """
+    logger.info("AI 全文改写（Markdown 输出）...")
+
+    from openai import OpenAI
+
+    client = OpenAI(
+        api_key=settings.ai_api_key,
+        base_url=settings.ai_base_url,
+    )
+
+    prompt = REWRITE_MARKDOWN_PROMPT.format(content=content, title=title or "无标题")
+
+    try:
+        response = client.chat.completions.create(
+            model=settings.ai_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "你是多平台自媒体创作者，擅长将职场爆料改写为有吸引力的 Markdown 文章。只输出改写结果，不解释。",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            max_tokens=2000,
+        )
+
+        result = response.choices[0].message.content
+        if not result:
+            logger.error("AI 返回空结果，使用原文")
+            return (title, content)
+
+        result = result.strip()
+
+        # 解析 AI 输出：首行标题 + 空行 + 正文
+        new_title, new_body = _split_rewrite_result(result, title)
+
+        logger.success(f"Markdown 改写完成 ✓ 标题: {title[:20]}→{new_title[:20]}, 正文: {len(content)}→{len(new_body)}字")
+        return (new_title, new_body)
+
+    except Exception as e:
+        logger.error(f"Markdown 改写失败: {e}，使用原文")
+        return (title, content)
+
+
 # ========== 图片打码 ==========
 
 def image_compliance(image_path: str, company_names: Optional[List[str]] = None) -> str:

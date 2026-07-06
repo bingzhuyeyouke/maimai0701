@@ -171,6 +171,10 @@ def start_chrome():
         resp = urllib.request.urlopen(f"http://localhost:{DEBUG_PORT}/json/version", timeout=3)
         if resp.status == 200:
             logger.success(f"✓ Chrome 已启动，调试端口: {DEBUG_PORT}")
+
+            # 检查 Wechatsync 扩展是否已加载
+            _check_wechatsync_extension()
+
             logger.info(f"保持此窗口不要关闭，在另一个终端运行：python3 paste_post.py")
             return True
     except Exception:
@@ -182,6 +186,39 @@ def start_chrome():
     else:
         logger.info("请先完全退出 Chrome（Cmd+Q），然后重新运行本脚本")
     return False
+
+
+def _check_wechatsync_extension():
+    """检查 Wechatsync Chrome 扩展是否已加载"""
+    import json
+    import urllib.request
+
+    try:
+        # 通过 Chrome DevTools Protocol 获取已安装的扩展
+        resp = urllib.request.urlopen(f"http://localhost:{DEBUG_PORT}/json/list", timeout=3)
+        targets = json.loads(resp.read().decode())
+
+        # 检查是否有 Wechatsync 相关的扩展页面
+        wechatsync_found = False
+        for target in targets:
+            url = target.get("url", "")
+            title = target.get("title", "")
+            if "wechatsync" in url.lower() or "sync-assistant" in url.lower() or "wechatsync" in title.lower():
+                wechatsync_found = True
+                break
+
+        if wechatsync_found:
+            logger.success("  ✓ Wechatsync 扩展已加载")
+        else:
+            logger.warning("  ⚠️ Wechatsync 扩展未检测到")
+            logger.info("  如需多平台发布，请安装 Wechatsync 扩展：")
+            logger.info("    1. Chrome 打开 chrome://extensions/")
+            logger.info("    2. 启用开发者模式")
+            logger.info("    3. 加载已解压的扩展: /Users/bytedance/claude/Wechatsync/packages/extension/dist")
+            logger.info("    4. 扩展设置中启用 MCP 连接，Token: maimai-sync-2024")
+
+    except Exception as e:
+        logger.debug(f"  Wechatsync 扩展检查跳过: {e}")
 
 
 if __name__ == "__main__":
