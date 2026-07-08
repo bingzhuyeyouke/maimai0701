@@ -53,24 +53,6 @@ class Settings(BaseSettings):
         description="SQLite 数据库文件名",
     )
 
-    # ---------- Wechatsync 多平台发布 ----------
-    wechatsync_token: str = Field(
-        default="",
-        description="Wechatsync MCP Token（需与 Chrome 扩展中设置的一致）",
-    )
-    wechatsync_default_platforms: str = Field(
-        default="weixin,toutiao",
-        description="默认发布平台（逗号分隔），如 weixin,toutiao,zhihu,juejin",
-    )
-    wechatsync_mcp_path: str = Field(
-        default=str(Path.home() / "Wechatsync" / "packages" / "mcp-server" / "dist" / "index.js"),
-        description="Wechatsync MCP server 路径（默认 ~/Wechatsync/packages/mcp-server/dist/index.js）",
-    )
-    wechatsync_ws_port: int = Field(
-        default=9527,
-        description="Wechatsync WebSocket 端口（Chrome 扩展连接用）",
-    )
-
     @property
     def db_full_path(self) -> Path:
         """数据库完整路径（基于项目根目录）"""

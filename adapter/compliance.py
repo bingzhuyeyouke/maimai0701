@@ -271,8 +271,7 @@ def text_rewrite_markdown(content: str, title: str = "") -> tuple:
 
     与 text_rewrite() 的区别：
     - text_rewrite() 输出纯文本，适合脉脉和头条
-    - text_rewrite_markdown() 输出 Markdown，适合知乎、掘金、CSDN 等支持 Markdown 的平台，
-      也适合通过 Wechatsync 的 sync_article MCP 工具发布
+    - text_rewrite_markdown() 输出 Markdown，适合知乎、掘金、CSDN 等支持 Markdown 的平台
 
     参数:
         content: 原始帖子正文

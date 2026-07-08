@@ -177,7 +177,6 @@ cp .env.example .env
 | `AI_API_KEY` | AI 接口密钥（合规改写用） | 空 |
 | `AI_MODEL` | AI 模型 | deepseek-chat |
 | `AI_BASE_URL` | AI 接口地址 | https://api.deepseek.com |
-| `WECHATIONSYNC_TOKEN` | Wechatsync MCP Token | 空 |
 
 ## 🚀 快速开始
 
@@ -221,9 +220,7 @@ maimai/
 ├── shandian_post.py       # 闪电观察者入口
 ├── publisher/
 │   ├── multipost.py       # MultiPost 多平台发布核心
-│   ├── maimai.py          # 脉脉发帖核心（MaimaiPageOps mixin）
-│   ├── wechatsync.py      # Wechatsync 多平台发布（知乎/掘金等）
-│   └── smart_publisher.py # 智能发布路由
+│   └── maimai.py          # 脉脉发帖核心（MaimaiPageOps mixin）
 ├── adapter/
 │   ├── compliance.py      # 图片合规打码（爆料活动用）
 │   └── image_search.py    # 图片搜索（百度网页+Pexels API）

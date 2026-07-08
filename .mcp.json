@@ -1,11 +1,1 @@
-{
-  "mcpServers": {
-    "wechatsync": {
-      "command": "node",
-      "args": ["/Users/bytedance/claude/Wechatsync/packages/mcp-server/dist/index.js"],
-      "env": {
-        "WECHATSYNC_TOKEN": "b249f81f-e986-4485-9c99-d69a65e85e40"
-      }
-    }
-  }
-}
+{}
