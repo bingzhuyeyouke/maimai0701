@@ -333,54 +333,74 @@ class MaimaiPageOps:
         time.sleep(2)
 
         # 3. 点击搜索结果（精确匹配优先 → 前缀匹配 → 兜底点第一个结果）
-        # 搜索结果在弹出面板中，使用视口相对定位
+        # ⚠️ 关键：弹出面板分左右两栏，左栏点击会导航到话题页面，
+        # 必须点击右栏的结果才能将话题添加到编辑器。
+        # 右栏 x > 视口宽度60%（大约在页面右侧），左栏在左侧。
         selected = page.evaluate('''(args) => {
             const topic = args.topic;
             const vh = args.vh;
+            const vw = args.vw;
+            const rightX = vw * 0.6;  // 右栏左边界
             const all = document.querySelectorAll('div');
-            let exactRow = null;
-            let exactLen = Infinity;
-            let prefixRow = null;
-            let prefixLen = Infinity;
-            let firstRow = null;  // 兜底：第一个结果
+            let exactRowRight = null; let exactLenRight = Infinity;
+            let prefixRowRight = null; let prefixLenRight = Infinity;
+            let exactRowLeft = null; let exactLenLeft = Infinity;
+            let prefixRowLeft = null; let prefixLenLeft = Infinity;
+            let firstRowRight = null;
+            let firstRowLeft = null;
 
             for (const el of all) {
                 const t = (el.textContent || '').trim();
                 const rect = el.getBoundingClientRect();
                 const cls = (el.className || '').toString();
 
-                // 搜索结果在弹出面板中：Y在视口10%~90%范围，高度合理
+                // 搜索结果行：cursor-pointer + 合理高度 + 包含帖子数
                 if (!cls.includes('cursor-pointer') || rect.y < vh * 0.1 || rect.height < 20 || rect.height > 80) continue;
+                if (!t.includes('帖子') && !t.includes('条')) continue;
 
-                // 记录第一个结果（兜底用）
-                if (!firstRow) firstRow = el;
+                const isRight = rect.x > rightX;
+
+                if (isRight && !firstRowRight) firstRowRight = el;
+                if (!isRight && !firstRowLeft) firstRowLeft = el;
 
                 if (!t.includes(topic)) continue;
 
                 const afterTopic = t.substring(topic.length);
                 const isExactTopic = t.startsWith(topic) && (afterTopic.length === 0 || /^\\d/.test(afterTopic));
 
-                if (isExactTopic) {
-                    if (t.length < exactLen) { exactLen = t.length; exactRow = el; }
+                if (isRight) {
+                    if (isExactTopic) {
+                        if (t.length < exactLenRight) { exactLenRight = t.length; exactRowRight = el; }
+                    } else {
+                        if (t.length < prefixLenRight) { prefixLenRight = t.length; prefixRowRight = el; }
+                    }
                 } else {
-                    if (t.length < prefixLen) { prefixLen = t.length; prefixRow = el; }
+                    if (isExactTopic) {
+                        if (t.length < exactLenLeft) { exactLenLeft = t.length; exactRowLeft = el; }
+                    } else {
+                        if (t.length < prefixLenLeft) { prefixLenLeft = t.length; prefixRowLeft = el; }
+                    }
                 }
             }
 
-            const target = exactRow || prefixRow || firstRow;
+            // 优先级：右栏精确 > 右栏前缀 > 左栏精确 > 右栏第一个 > 左栏前缀 > 左栏第一个
+            const target = exactRowRight || prefixRowRight || exactRowLeft || firstRowRight || prefixRowLeft || firstRowLeft;
+            const isRightPanel = target === exactRowRight || target === prefixRowRight || target === firstRowRight;
             if (target) {
-                const matchType = exactRow ? 'exact' : (prefixRow ? 'prefix' : 'first');
+                const matchType = (target === exactRowRight || target === exactRowLeft) ? 'exact'
+                    : ((target === prefixRowRight || target === prefixRowLeft) ? 'prefix' : 'first');
                 target.click();
-                return { match: matchType, text: target.textContent.trim().substring(0, 30) };
+                return { match: matchType, panel: isRightPanel ? 'right' : 'left', text: target.textContent.trim().substring(0, 30) };
             }
             return null;
-        }''', {"topic": topic, "vh": vh})
+        }''', {"topic": topic, "vh": vh, "vw": vw})
 
         if selected:
             match_type = selected.get('match', 'unknown')
+            panel = selected.get('panel', '?')
             if match_type == 'first':
                 logger.info(f"  ⚠️ 未找到精确匹配，使用第一个搜索结果: {selected.get('text', topic)}")
-            logger.success(f"  ✓ 话题已点击: {selected.get('text', topic)}")
+            logger.success(f"  ✓ 话题已点击[{panel}栏]: {selected.get('text', topic)}")
             time.sleep(2)
             page.keyboard.press("Escape")
             time.sleep(1)

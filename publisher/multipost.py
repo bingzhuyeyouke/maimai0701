@@ -24,7 +24,11 @@ MultiPost 发布模块 —— 自动操作 MultiPost 网页端发布内容到多
   - 不要短时间内大量发布，可能触发平台风控
 """
 
+import os
+import platform
 import random
+import signal
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -38,8 +42,14 @@ from publisher.maimai import MaimaiPageOps, MAIMAI_HOME_URL, DEFAULT_TOPIC
 
 # ========== 常量 ==========
 
-# Chrome 远程调试地址
-CDP_URL = "http://localhost:9222"
+# Chrome 远程调试地址（默认，connect 时可能被覆盖）
+DEFAULT_CDP_URL = "http://localhost:9222"
+
+# 独立 Chrome 实例的调试端口和 profile 目录
+# dedicated 模式：脚本自动启停 Chrome，用户无需手动运行 start_chrome.py
+# 使用与 start_chrome.py 相同的 profile 和端口，确保登录状态可用
+DEDICATED_DEBUG_PORT = 9333
+DEDICATED_USER_DATA = "/tmp/chrome-automation-profile"
 
 # MultiPost 编辑器地址
 MULTIPOST_URL = "https://multipost.app/"
@@ -53,26 +63,186 @@ MULTIPOST_EXT_ID = "dhohkaclnjgcikfoaacfgijgjgceofih"
 # 今日头条正文末尾要追加的话题（用户要求）
 TOUTIAO_HASHTAG = "#上头条 聊热点#"
 
+# 跨平台 Chrome 路径
+IS_WINDOWS = platform.system() == "Windows"
+if IS_WINDOWS:
+    CHROME_PATHS = [
+        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+    ]
+    CHROME_DEFAULT_PROFILE = os.path.expandvars(
+        r"%LocalAppData%\Google\Chrome\User Data"
+    )
+else:
+    CHROME_PATHS = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ]
+    CHROME_DEFAULT_PROFILE = str(Path.home() / "Library/Application Support/Google/Chrome")
+
+
+def _find_chrome() -> str:
+    """查找 Chrome 可执行文件"""
+    for path in CHROME_PATHS:
+        if Path(path).exists():
+            return path
+    raise FileNotFoundError("未找到 Chrome，请安装 Google Chrome")
+
+
+def _ensure_profile(profile_dir: str):
+    """确保独立 profile 目录存在（从默认 profile 复制关键文件）"""
+    dest = Path(profile_dir)
+    if dest.exists():
+        return
+    logger.info(f"  首次使用独立 profile，复制登录状态（约30秒）...")
+    dest.mkdir(parents=True, exist_ok=True)
+    dest_default = dest / "Default"
+    dest_default.mkdir(parents=True, exist_ok=True)
+
+    src = Path(CHROME_DEFAULT_PROFILE)
+    if not src.exists():
+        logger.warning("  未找到 Chrome 默认 profile，将使用空白 profile")
+        return
+
+    src_default = src / "Default"
+    items = [
+        "Extensions", "Extension State", "Extension Rules",
+        "Local Storage", "Session Storage", "IndexedDB",
+        "Cookies", "Cookies-journal",
+        "Login Data", "Login Data-journal",
+        "Web Data", "Web Data-journal",
+        "Preferences", "Secure Preferences",
+        "Local Extension Settings",
+        "Favicons", "Favicons-journal",
+        "History", "History-journal",
+        "Bookmarks",
+    ]
+    import shutil
+    for item in items:
+        src_item = src_default / item
+        if src_item.exists():
+            try:
+                if IS_WINDOWS:
+                    dst_item = dest_default / item
+                    if src_item.is_dir():
+                        if dst_item.exists():
+                            shutil.rmtree(dst_item)
+                        shutil.copytree(str(src_item), str(dst_item))
+                    else:
+                        shutil.copy2(str(src_item), str(dst_item))
+                else:
+                    subprocess.run(["cp", "-r", str(src_item), str(dest_default / item)],
+                                   capture_output=True, timeout=30)
+            except Exception:
+                pass
+
+    for item in ["Local State", "First Run", "Last Browser"]:
+        src_item = src / item
+        if src_item.exists():
+            try:
+                if IS_WINDOWS:
+                    shutil.copy2(str(src_item), str(dest / item))
+                else:
+                    subprocess.run(["cp", str(src_item), str(dest / item)],
+                                   capture_output=True, timeout=5)
+            except Exception:
+                pass
+    logger.success("  ✓ Profile 复制完成")
+
+
+def _start_dedicated_chrome(port: int, profile_dir: str) -> Optional[subprocess.Popen]:
+    """启动独立的 Chrome 实例，返回进程对象"""
+    chrome_path = _find_chrome()
+    _ensure_profile(profile_dir)
+
+    cmd = [
+        chrome_path,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={profile_dir}",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-background-networking",
+        "--disable-popup-blocking",
+        "--disable-features=CalculateNativeWinOcclusion",
+    ]
+
+    # macOS: caffeinate 防休眠
+    if not IS_WINDOWS:
+        cmd = ["caffeinate", "-i"] + cmd
+
+    process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # 等待启动
+    logger.info("  等待独立 Chrome 启动...")
+    import urllib.request
+    for _ in range(10):
+        time.sleep(2)
+        try:
+            resp = urllib.request.urlopen(f"http://localhost:{port}/json/version", timeout=3)
+            if resp.status == 200:
+                logger.success(f"  ✓ 独立 Chrome 已启动，端口: {port}")
+                return process
+        except Exception:
+            continue
+
+    logger.error("  ❌ 独立 Chrome 启动失败")
+    return None
+
+
+def _stop_dedicated_chrome(process: subprocess.Popen, port: int):
+    """关闭独立 Chrome 实例"""
+    try:
+        # 先尝试优雅关闭
+        if IS_WINDOWS:
+            process.terminate()
+        else:
+            process.send_signal(signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        logger.info("  ✓ 独立 Chrome 已关闭")
+    except Exception as e:
+        logger.warning(f"  ⚠️ 关闭独立 Chrome 异常: {e}")
+
 
 class MultiPostPublisher(MaimaiPageOps):
     """
     MultiPost 发布器
 
     用法：
+        # 方式1：自动启动独立Chrome（推荐，不影响日常浏览器）
+        publisher = MultiPostPublisher(dedicated=True)
+        publisher.connect()
+        publisher.publish(...)
+        publisher.disconnect()  # 自动关闭独立Chrome
+
+        # 方式2：连接已有Chrome（传统方式）
         publisher = MultiPostPublisher()
         publisher.connect()
-        publisher.publish(title="标题", body="正文", platforms=["今日头条", "微信公众号"])
-        publisher.disconnect()
+        publisher.publish(...)
+        publisher.disconnect()  # 只断开连接，不关Chrome
 
     继承 MaimaiPageOps 以获得脉脉页面的 DOM 操作（添加话题/勾选开关/发动态），
     在 _publish_maimai 中用于 MultiPost 打开并填好的脉脉标签页。
     """
 
-    def __init__(self):
+    def __init__(self, dedicated: bool = False, cdp_url: str = None):
+        """
+        参数:
+            dedicated: True=自动启动独立Chrome实例（发布完成后自动关闭）
+                       False=连接用户已有的Chrome（默认，兼容旧逻辑）
+            cdp_url:   自定义CDP地址（仅非dedicated模式生效）
+        """
+        self._dedicated = dedicated
+        self._cdp_url = cdp_url or DEFAULT_CDP_URL
         self._playwright = None
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
+        # 独立 Chrome 进程
+        self._chrome_process: Optional[subprocess.Popen] = None
+        self._chrome_port: int = DEDICATED_DEBUG_PORT
         # 脉脉话题，publish() 时设置，_publish_maimai 读取
         self._maimai_topic: Optional[str] = None
         # 本次 publish 选中的平台列表，_click_publish 据此决定是否扫描脉脉标签页
@@ -80,16 +250,63 @@ class MultiPostPublisher(MaimaiPageOps):
 
     def connect(self) -> bool:
         """
-        连接到用户已启动的 Chrome 浏览器
+        连接到 Chrome 浏览器
 
-        返回:
-            True 连接成功，False 连接失败
+        dedicated=True 时自动启动独立Chrome实例，
+        dedicated=False 时连接用户已有的Chrome。
         """
-        logger.info(f"连接到 Chrome（{CDP_URL}）...")
+        if self._dedicated:
+            return self._connect_dedicated()
+        else:
+            return self._connect_existing()
+
+    def _connect_dedicated(self) -> bool:
+        """连接独立 Chrome 实例（9333端口，用户需提前启动并登录）"""
+        cdp_url = f"http://localhost:{self._chrome_port}"
+        logger.info(f"连接到独立 Chrome（{cdp_url}）...")
 
         try:
             self._playwright = sync_playwright().start()
-            self._browser = self._playwright.chromium.connect_over_cdp(CDP_URL)
+            self._browser = self._playwright.chromium.connect_over_cdp(cdp_url)
+            self._context = self._browser.contexts[0] if self._browser.contexts else None
+
+            if not self._context:
+                logger.error("❌ 未找到浏览器上下文")
+                return False
+
+            logger.success("✓ 已连接到独立 Chrome")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ 连接独立 Chrome 失败: {e}")
+            logger.info(f"请先启动独立 Chrome（端口{self._chrome_port}）并登录各平台")
+            return False
+
+    @staticmethod
+    def _kill_chrome_on_port(port: int):
+        """关闭占用指定端口的 Chrome 进程"""
+        try:
+            if IS_WINDOWS:
+                subprocess.run(
+                    f'for /f "tokens=5" %a in (\'netstat -aon ^| findstr :{port}\') do taskkill /F /PID %a',
+                    shell=True, capture_output=True, timeout=10
+                )
+            else:
+                # macOS/Linux: 找到监听该端口的进程并关闭
+                result = subprocess.run(
+                    f'lsof -ti :{port} | xargs kill -9 2>/dev/null',
+                    shell=True, capture_output=True, timeout=10
+                )
+        except Exception:
+            pass
+
+    def _connect_existing(self) -> bool:
+        """连接用户已启动的 Chrome 浏览器（传统方式）"""
+        logger.info(f"连接到 Chrome（{self._cdp_url}）...")
+
+        try:
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.connect_over_cdp(self._cdp_url)
             self._context = self._browser.contexts[0] if self._browser.contexts else None
 
             if not self._context:
@@ -102,21 +319,26 @@ class MultiPostPublisher(MaimaiPageOps):
         except Exception as e:
             logger.error(f"❌ 连接 Chrome 失败: {e}")
             logger.info("请先启动 Chrome（带调试端口）：")
-            import platform
-            if platform.system() == "Windows":
+            if IS_WINDOWS:
                 logger.info("  python start_chrome.py")
-                logger.info("  或手动: chrome.exe --remote-debugging-port=9222 --user-data-dir=%TEMP%\\chrome-automation-profile")
             else:
                 logger.info("  python3 start_chrome.py")
-                logger.info("  或手动: /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-automation-profile")
             return False
+
+    def _get_cdp_url(self) -> str:
+        """获取当前CDP地址"""
+        if self._dedicated:
+            return f"http://localhost:{self._chrome_port}"
+        return self._cdp_url
 
     def disconnect(self):
         """断开连接（不关闭用户的 Chrome）"""
-        # 不关闭 browser，因为是用户的 Chrome
         if self._playwright:
             self._playwright.stop()
-        logger.info("已断开 Chrome 连接")
+        if self._dedicated:
+            logger.info("已断开独立 Chrome 连接")
+        else:
+            logger.info("已断开 Chrome 连接")
 
     def publish(
         self,
@@ -256,7 +478,7 @@ class MultiPostPublisher(MaimaiPageOps):
                                 except Exception:
                                     pass
                             self._playwright = sync_playwright().start()
-                            self._browser = self._playwright.chromium.connect_over_cdp(CDP_URL)
+                            self._browser = self._playwright.chromium.connect_over_cdp(self._get_cdp_url())
                             self._context = self._browser.contexts[0] if self._browser.contexts else None
                             if self._context:
                                 logger.success("  ✓ Chrome 已重连")
@@ -335,7 +557,7 @@ class MultiPostPublisher(MaimaiPageOps):
                 time.sleep(2)
 
                 self._playwright = sync_playwright().start()
-                self._browser = self._playwright.chromium.connect_over_cdp(CDP_URL)
+                self._browser = self._playwright.chromium.connect_over_cdp(self._get_cdp_url())
                 self._context = self._browser.contexts[0] if self._browser.contexts else None
 
                 if self._context:
@@ -700,7 +922,7 @@ class MultiPostPublisher(MaimaiPageOps):
         try:
             self._playwright.stop()
             self._playwright = sync_playwright().start()
-            self._browser = self._playwright.chromium.connect_over_cdp(CDP_URL)
+            self._browser = self._playwright.chromium.connect_over_cdp(self._get_cdp_url())
             self._context = self._browser.contexts[0] if self._browser.contexts else None
             if self._context:
                 logger.success("  ✓ Playwright 已重连")
