@@ -49,7 +49,7 @@ DEFAULT_CDP_URL = "http://localhost:9222"
 # dedicated 模式：脚本自动启停 Chrome，用户无需手动运行 start_chrome.py
 # 使用与 start_chrome.py 相同的 profile 和端口，确保登录状态可用
 DEDICATED_DEBUG_PORT = 9333
-DEDICATED_USER_DATA = "/tmp/chrome-automation-profile"
+DEDICATED_USER_DATA = os.path.join(os.environ.get("TEMP", ""), "chrome-automation-profile") if IS_WINDOWS else "/tmp/chrome-automation-profile"
 
 # MultiPost 编辑器地址
 MULTIPOST_URL = "https://multipost.app/"
@@ -1815,7 +1815,7 @@ class MultiPostPublisher(MaimaiPageOps):
         deleted = 0
         for img_path in image_paths:
             try:
-                p = PROJECT_ROOT / img_path if not str(img_path).startswith('/') else Path(img_path)
+                p = Path(img_path) if Path(img_path).is_absolute() else PROJECT_ROOT / img_path
                 # 安全守卫：只删项目目录下的文件
                 if not str(p).startswith(str(PROJECT_ROOT)):
                     continue
