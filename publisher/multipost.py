@@ -362,6 +362,11 @@ class MultiPostPublisher(MaimaiPageOps):
 
         返回:
             True 发布成功，False 失败
+
+        ⚠️ 0711 改进：内置重试机制
+        Chrome 扩展偶尔不打开所有平台标签页（如只打开头条，漏掉脉脉/公众号），
+        mouse.click 改善了成功率但不能完全解决。加重试：如果标签页不全，
+        关掉已打开的标签页，回到编辑器重新走一遍发布流程，最多重试2次。
         """
         if platforms is None:
             platforms = DEFAULT_PLATFORMS
@@ -370,37 +375,60 @@ class MultiPostPublisher(MaimaiPageOps):
         self._maimai_topic = maimai_topic or DEFAULT_TOPIC
         self._selected_platforms = platforms
 
-        try:
-            # 第1步：打开 MultiPost 编辑器
-            page = self._open_editor()
+        max_attempts = 3  # 最多尝试3次
 
-            # 第2步：上传图片（在填文字之前，因为上传后光标位置更可控）
-            if image_paths:
-                self._upload_images(page, image_paths)
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # 第1步：打开 MultiPost 编辑器
+                page = self._open_editor()
 
-            # 第3步：填入标题和正文
-            self._fill_content(page, title, body)
+                # 第2步：上传图片（在填文字之前，因为上传后光标位置更可控）
+                if image_paths:
+                    self._upload_images(page, image_paths)
 
-            # 第4步：点击「下一步」
-            self._click_next(page)
+                # 第3步：填入标题和正文
+                self._fill_content(page, title, body)
 
-            # 第5步：先取消所有已勾选平台，再勾选目标平台
-            self._deselect_all_platforms(page)
-            self._select_platforms(page, platforms)
+                # 第4步：点击「下一步」
+                self._click_next(page)
 
-            if dry_run:
-                logger.info("🔍 干跑模式：内容已填入，平台已选择，但不点击发布")
-                page.screenshot(path="debug_screenshots/dry_run_preview.png", full_page=True)
-                return True
+                # 第5步：先取消所有已勾选平台，再勾选目标平台
+                self._deselect_all_platforms(page)
+                self._select_platforms(page, platforms)
 
-            # 第6步：点击发布 + 处理平台标签页
-            result = self._click_publish(page, title, body)
+                if dry_run:
+                    logger.info("🔍 干跑模式：内容已填入，平台已选择，但不点击发布")
+                    page.screenshot(path="debug_screenshots/dry_run_preview.png", full_page=True)
+                    return True
 
-            return result
+                # 第6步：点击发布 + 处理平台标签页（返回缺失平台列表）
+                missing_platforms = self._click_publish(page, title, body, attempt=attempt, max_attempts=max_attempts)
 
-        except Exception as e:
-            logger.error(f"❌ 发布失败: {e}")
-            return False
+                if not missing_platforms:
+                    # 所有平台都成功了
+                    return True
+
+                # 有缺失平台，需要重试
+                if attempt < max_attempts:
+                    logger.warning(f"  🔄 第{attempt}次尝试缺失平台: {missing_platforms}，将重试...")
+                    # 更新 platforms 为只缺失的平台，避免重复发布已成功的平台
+                    platforms = missing_platforms
+                    self._selected_platforms = platforms
+                    # 等待一下再重试
+                    time.sleep(5)
+                else:
+                    # 最后一次尝试仍失败
+                    logger.error(f"  ❌ {max_attempts}次尝试后仍有缺失平台: {missing_platforms}")
+                    return False
+
+            except Exception as e:
+                logger.error(f"❌ 发布失败: {e}")
+                if attempt >= max_attempts:
+                    return False
+                logger.warning(f"  🔄 第{attempt}次尝试异常，重试...")
+                time.sleep(5)
+
+        return False
 
     def batch_post(
         self,
@@ -667,27 +695,32 @@ class MultiPostPublisher(MaimaiPageOps):
         logger.success("✓ 内容已填入")
 
     def _click_next(self, page: Page):
-        """第3步：点击蓝色「下一步」按钮"""
+        """第3步：点击蓝色「下一步」按钮
+
+        ⚠️ 使用 Playwright mouse.click() 代替 JS btn.click()，
+        与 _click_publish 保持一致，确保用户手势标志正确传递。
+        """
         logger.info("点击「下一步」...")
 
-        # 找蓝色按钮（background-color: rgb(0, 111, 238)）
-        clicked = page.evaluate('''() => {
+        # 找蓝色按钮坐标
+        btn_pos = page.evaluate('''() => {
             const btns = document.querySelectorAll('button');
             for (const btn of btns) {
                 const style = getComputedStyle(btn);
                 if (style.backgroundColor.includes('0, 111, 238')) {
                     const rect = btn.getBoundingClientRect();
-                    if (rect.width > 100) {  // 确保是主按钮，不是小图标
-                        btn.click();
-                        return true;
+                    if (rect.width > 100) {
+                        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
                     }
                 }
             }
-            return false;
+            return null;
         }''')
 
-        if not clicked:
+        if not btn_pos:
             raise RuntimeError("未找到「下一步」按钮")
+
+        page.mouse.click(btn_pos['x'], btn_pos['y'])
 
         time.sleep(3)  # 等待平台选择页加载
         logger.success("✓ 已进入平台选择页")
@@ -881,36 +914,48 @@ class MultiPostPublisher(MaimaiPageOps):
 
         return result.get('found', False)
 
-    def _click_publish(self, page: Page, title: str, body: str) -> bool:
+    def _click_publish(self, page: Page, title: str, body: str, attempt: int = 1, max_attempts: int = 1) -> list:
         """第6步：点击 MultiPost 发布按钮，然后处理各平台标签页
 
         MultiPost 点发布后，各平台标签页可能是：
           - 新开的（头条/公众号通常新开）
           - 复用已有的（脉脉通常复用）
         统一用按内容匹配的方式找到所有需要处理的标签页。
+
+        ⚠️ 0711 修复：使用 Playwright mouse.click() 代替 JS evaluate btn.click()
+        原因：JS btn.click() 是程序化点击，不携带浏览器「用户手势标志」，
+        Chrome 扩展调用 chrome.tabs.create() 时可能因缺少手势标志而静默失败，
+        导致只打开头条标签页而丢失脉脉/公众号。
+        Playwright mouse.click() 模拟完整的 mousedown→mouseup→click 事件序列，
+        与真实用户点击一致，手势标志能正确传递给扩展。
+
+        返回:
+            缺失平台中文名列表（如 ["脉脉", "微信公众号"]），空列表=全部成功
         """
         logger.info("⚠️  即将点击发布按钮，这是真实发布操作！")
 
-        # 点击蓝色发布按钮
-        clicked = page.evaluate('''() => {
+        # 用 JS 找到按钮的坐标，再用 Playwright mouse.click() 点击
+        # ⚠️ 不能用 evaluate(() => btn.click())——那是程序化点击，不传手势标志
+        btn_pos = page.evaluate('''() => {
             const btns = document.querySelectorAll('button');
             for (const btn of btns) {
                 const style = getComputedStyle(btn);
                 if (style.backgroundColor.includes('0, 111, 238')) {
                     const rect = btn.getBoundingClientRect();
                     if (rect.width > 100) {
-                        btn.click();
-                        return true;
+                        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, w: rect.width };
                     }
                 }
             }
-            return false;
+            return null;
         }''')
 
-        if not clicked:
+        if not btn_pos:
             raise RuntimeError("未找到发布按钮")
 
-        logger.info("  ✓ MultiPost 发布按钮已点击")
+        # Playwright mouse.click 模拟真实鼠标点击（mousedown → mouseup → click）
+        page.mouse.click(btn_pos['x'], btn_pos['y'])
+        logger.info("  ✓ MultiPost 发布按钮已点击（Playwright mouse.click）")
 
         # 等待 Chrome 扩展打开平台标签页（需要足够时间）
         logger.info("  等待 Chrome 扩展打开平台标签页（20秒）...")
@@ -928,13 +973,18 @@ class MultiPostPublisher(MaimaiPageOps):
                 logger.success("  ✓ Playwright 已重连")
             else:
                 logger.error("  ❌ 重连后未找到上下文")
-                return False
+                return list(self._selected_platforms or [])
         except Exception as e:
             logger.error(f"  ❌ Playwright 重连失败: {e}")
-            return False
+            return list(self._selected_platforms or [])
 
         # 按内容匹配找到所有刚填入内容的平台标签页
-        platform_tabs = self._find_all_platform_tabs(body, timeout=15)
+        # ⚠️ 传入期望平台列表 + 增大超时，避免只找到快打开的头条就返回
+        platform_tabs = self._find_all_platform_tabs(
+            body,
+            timeout=25,
+            expected_platforms=self._selected_platforms,
+        )
 
         if not platform_tabs:
             # 没有找到任何平台标签页，检查 MultiPost 页面状态
@@ -950,14 +1000,14 @@ class MultiPostPublisher(MaimaiPageOps):
 
             if result == 'success':
                 logger.success("🎉 MultiPost 发布成功（未打开平台标签页）")
-                return True
+                return []
             elif result == 'error':
                 logger.error("❌ MultiPost 发布失败")
-                return False
+                return list(self._selected_platforms or [])
             else:
                 logger.warning("⚠️  发布结果未知，未检测到平台标签页")
                 self._save_screenshot(page, "multipost_after_publish")
-                return True
+                return []
 
         # 逐个处理平台标签页（按优先级排序：脉脉→公众号→头条）
         PLATFORM_PRIORITY = {'maimai': 1, 'wechat': 2, 'toutiao': 3}
@@ -992,12 +1042,27 @@ class MultiPostPublisher(MaimaiPageOps):
 
         known_results = {k: v for k, v in results.items() if k != 'unknown'}
         if not known_results:
-            return False
+            return list(self._selected_platforms or [])
 
         all_success = all(known_results.values())
         if all_success:
             logger.success("🎉 所有平台发布成功！")
-        return all_success
+            return []
+
+        # 计算缺失平台：期望的平台中，未成功发布的
+        # 平台 key → 中文名 反向映射
+        KEY_TO_CN = {v: k for k, v in self.PLATFORM_CN_TO_KEY.items()}
+        missing = []
+        for cn_name in (self._selected_platforms or []):
+            key = self.PLATFORM_CN_TO_KEY.get(cn_name)
+            if key and key not in known_results:
+                missing.append(cn_name)
+            elif key and not known_results.get(key, False):
+                missing.append(cn_name)
+
+        if missing:
+            logger.warning(f"  ⚠️ 缺失平台: {missing}")
+        return missing
 
     # ========== 平台标签页检测与交互 ==========
 
@@ -1121,18 +1186,40 @@ class MultiPostPublisher(MaimaiPageOps):
             time.sleep(1)
         return None
 
-    def _find_all_platform_tabs(self, expected_body: str, timeout: int = 15) -> list:
+    # 平台中文名 → 内部 key 的映射（供 _find_all_platform_tabs 使用）
+    PLATFORM_CN_TO_KEY = {
+        '脉脉': 'maimai',
+        '微信公众号': 'wechat',
+        '今日头条': 'toutiao',
+    }
+
+    def _find_all_platform_tabs(self, expected_body: str, timeout: int = 15, expected_platforms: list = None) -> list:
         """
         找到所有刚被 MultiPost 打开的平台标签页。
 
-        策略（0707版改进）：
+        策略（0711版改进）：
           1. 先按 URL 匹配平台（maimai.cn / mp.weixin.qq.com / mp.toutiao.com）
           2. 内容匹配仅作辅助确认（不强制，因为MultiPost可能格式化了内容）
-          3. 找到任何一个平台标签页即返回（不等全部）
+          3. ⚠️ 找到部分标签页后继续等待，直到所有 expected_platforms 都找到或超时
+             （旧版：找到任何一个就立即返回，导致慢打开的脉脉/公众号被漏掉）
         返回去重后的 Page 列表（每个平台只取最新的一个）。
         """
         fragment = (expected_body or "")[:30]
+
+        # 计算期望找到的平台 key 集合
+        expected_keys = set()
+        if expected_platforms:
+            for cn_name in expected_platforms:
+                key = self.PLATFORM_CN_TO_KEY.get(cn_name)
+                if key:
+                    expected_keys.add(key)
+        if not expected_keys:
+            # 没传期望列表，退化为旧逻辑（找到任何一个就返回）
+            expected_keys = None
+
         logger.info("扫描所有平台标签页（URL匹配+内容辅助）...")
+        if expected_keys:
+            logger.info(f"  期望平台: {sorted(expected_keys)}")
 
         # 平台 URL 匹配规则
         PLATFORM_URL_RULES = {
@@ -1141,11 +1228,12 @@ class MultiPostPublisher(MaimaiPageOps):
             'toutiao': 'mp.toutiao.com',
         }
 
+        # 已确认找到的平台标签页（platform_key → Page），跨轮次累积
+        confirmed_tabs = {}
         deadline = time.time() + timeout
 
         while time.time() < deadline:
-            tabs = []
-            seen_platforms = set()
+            # 扫描当前所有标签页
             for pg in self._context.pages:
                 url = pg.url
                 # 跳过 MultiPost 自己和扩展页
@@ -1160,6 +1248,10 @@ class MultiPostPublisher(MaimaiPageOps):
                         break
 
                 if not platform:
+                    continue
+
+                # 已经确认过的平台，跳过重复扫描
+                if platform in confirmed_tabs:
                     continue
 
                 # 内容辅助确认（非强制：匹配到内容加分，匹配不到也接受）
@@ -1185,20 +1277,43 @@ class MultiPostPublisher(MaimaiPageOps):
                 else:
                     logger.info(f"  ✓ 找到平台标签页（URL匹配，内容未确认）: {platform} - {url[:60]}")
 
-                # 每个平台只取最后一个（最新的标签页）
-                tabs = [t for t in tabs if t[0] != platform]
-                tabs.append((platform, pg))
+                # 确认该平台标签页
+                confirmed_tabs[platform] = pg
 
-            if tabs:
-                result = [t[1] for t in tabs]
-                platforms_found = [t[0] for t in tabs]
-                logger.info(f"  ✓ 共找到 {len(result)} 个平台标签页: {platforms_found}")
-                return result
+            # 检查是否已找齐期望平台
+            if expected_keys is not None:
+                found_keys = set(confirmed_tabs.keys())
+                missing = expected_keys - found_keys
+                if not missing:
+                    logger.info(f"  ✓ 所有期望平台标签页已找齐: {sorted(found_keys)}")
+                    break
+                else:
+                    remaining = int(deadline - time.time())
+                    if remaining > 0:
+                        logger.info(f"  ⏳ 已找到 {sorted(found_keys)}，等待 {sorted(missing)}（剩余 {remaining}s）...")
+            else:
+                # 旧逻辑：找到任何一个就返回
+                if confirmed_tabs:
+                    break
 
             time.sleep(2)
 
-        logger.warning("  ⚠️ 未找到任何平台标签页")
-        return []
+        if not confirmed_tabs:
+            logger.warning("  ⚠️ 未找到任何平台标签页")
+            return []
+
+        # 汇总结果
+        result_pages = list(confirmed_tabs.values())
+        platforms_found = list(confirmed_tabs.keys())
+        logger.info(f"  ✓ 共找到 {len(result_pages)} 个平台标签页: {platforms_found}")
+
+        # 如果有期望但未找到的平台，记录警告
+        if expected_keys:
+            missing = expected_keys - set(platforms_found)
+            if missing:
+                logger.warning(f"  ⚠️ 以下平台标签页未在超时内打开: {sorted(missing)}")
+
+        return result_pages
 
     def _identify_platform(self, page: Page) -> str:
         """
